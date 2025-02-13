@@ -1,0 +1,104 @@
+import requests
+import time
+import os
+import re
+
+# User-Agent to prevent Reddit from blocking requests
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (iPad; CPU OS 14_0 like Mac OS X) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/88.0.4324.93 Safari/537.36"
+}
+
+def fetch_reddit_json(url):
+    """Fetch Reddit JSON data from a post URL with error handling."""
+    if not url.endswith(".json"):
+        url += ".json"
+    
+    response = requests.get(url, headers=HEADERS)
+    
+    if response.status_code != 200:
+        print(f"❌ Error: {response.status_code} - Could not fetch data.")
+        print("🔎 Response content:", response.text)
+        return None
+    
+    try:
+        data = response.json()
+        if not data:
+            print("❌ Error: Received empty response from Reddit.")
+            return None
+        return data
+    except requests.exceptions.JSONDecodeError:
+        print("❌ Error: Invalid JSON response from Reddit.")
+        print("🔎 Response content:", response.text)
+        return None
+
+def format_timestamp(timestamp):
+    """Convert Unix timestamp to a readable date format."""
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(timestamp))
+
+def parse_comments(comments, depth=0, max_depth=3):
+    """Recursively parse comments into Markdown format."""
+    markdown = ""
+    for comment in comments:
+        if "body" in comment["data"]:
+            indent = "    " * depth  # Indent replies
+            body = comment["data"]["body"].replace("\n", "\n" + indent)  # Preserve newlines
+            author = comment["data"]["author"]
+            score = comment["data"]["score"]
+            timestamp = format_timestamp(comment["data"]["created_utc"])
+
+            markdown += f"{indent}- **{author}** *(+{score} points, {timestamp})*: {body}\n\n"
+
+            # Check for replies and recurse
+            if "replies" in comment["data"] and isinstance(comment["data"]["replies"], dict):
+                markdown += parse_comments(comment["data"]["replies"]["data"]["children"], depth + 1, max_depth)
+        
+        # Stop recursion if max depth is reached
+        if depth >= max_depth:
+            break
+
+    return markdown
+
+def sanitize_filename(filename):
+    """Sanitize the filename by removing invalid characters."""
+    return re.sub(r'[\/:*?"<>|]', '_', filename)
+
+def convert_to_markdown(data):
+    """Convert Reddit post and comments to Markdown format."""
+    post = data[0]["data"]["children"][0]["data"]
+    title = post["title"]
+    subreddit = post["subreddit_name_prefixed"]
+    author = post["author"]
+    content = post.get("selftext", "").replace("\n", "\n\n")
+    score = post["score"]
+    timestamp = format_timestamp(post["created_utc"])
+
+    markdown = f"# {title}\n\n"
+    markdown += f"> **Posted by {author} in {subreddit}** *(+{score} points, {timestamp})*\n\n"
+    markdown += f"{content}\n\n---\n\n## Comments\n\n"
+
+    comments = data[1]["data"]["children"]
+    markdown += parse_comments(comments, depth=0, max_depth=3)
+
+    return title, markdown
+
+def save_to_file(title, markdown):
+    """Save the Markdown content to a file with the post title as the filename."""
+    sanitized_title = sanitize_filename(title)
+    filename = f"{sanitized_title}.md"
+    file_path = os.path.join(os.getcwd(), filename)
+    
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(markdown)
+    
+    print(f"✅ Saved to: {file_path}")
+    return file_path
+
+if __name__ == "__main__":
+    reddit_url = input("🔗 Enter the Reddit post URL: ").strip()
+    reddit_data = fetch_reddit_json(reddit_url)
+    
+    if reddit_data:
+        title, markdown_content = convert_to_markdown(reddit_data)
+        file_path = save_to_file(title, markdown_content)
+        
+        print(f"📄 The Markdown file has been saved as: {file_path}")
